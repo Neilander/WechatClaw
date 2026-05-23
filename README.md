@@ -1,16 +1,17 @@
 # WechatClaw
 
-微信 AI 机器人项目。当前代码处于 **Phase 0.5：本地 AI backend MVP**。
+微信 AI 机器人项目。当前代码处于 **Phase 1：部署准备 + 上云**。
 
-当前阶段只做本地后端验证：
+当前阶段只做 AI backend 部署准备：
 
 - FastAPI 后端
 - OpenAI SDK 调用 LLM
 - `user_id` 级别的本地记忆
 - `memory.json` 持久化
 - Swagger `/docs` 测试
+- Render 部署配置
 
-暂时不做企业微信、webhook、PDF、数据库、Docker、上云、前端、登录、支付、服务号。
+暂时不做企业微信、webhook、PDF、数据库、Docker、前端、登录、支付、服务号。
 
 ## 安装
 
@@ -73,6 +74,12 @@ python -m uvicorn main:app --reload
 
 ```text
 http://127.0.0.1:8000/docs
+```
+
+生产启动命令：
+
+```powershell
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ## 测试 /health
@@ -235,6 +242,117 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/memory/leo -Method Delete
 ### DELETE /memory/{user_id}
 
 清除某个用户的记忆。
+
+## Render 部署
+
+项目包含 [render.yaml](<D:/WechatClaw/render.yaml>)，Render 可以按这个配置构建和启动服务。
+
+配置内容：
+
+```yaml
+buildCommand: pip install -r requirements.txt
+startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+
+`main.py` 中的 `app = FastAPI(...)` 可被 `uvicorn main:app` 调用。
+
+### Render 环境变量
+
+在 Render Dashboard 的 Environment 里配置：
+
+```text
+OPENAI_API_KEY=your_openai_api_key_here
+MODEL_NAME=gpt-4o-mini
+MAX_HISTORY_MESSAGES=20
+SYSTEM_PROMPT=你是一个运行在微信里的 AI 助手，回答要简洁、有帮助。
+```
+
+如果改用 DeepSeek：
+
+```text
+OPENAI_API_KEY=your_deepseek_api_key_here
+OPENAI_BASE_URL=https://api.deepseek.com
+MODEL_NAME=deepseek-chat
+MAX_HISTORY_MESSAGES=20
+SYSTEM_PROMPT=你是一个运行在微信里的 AI 助手，回答要简洁、有帮助。
+```
+
+不要在 Render 或 Git 里提交本地 `.env` 文件。`.env` 只用于本地开发，已经被 `.gitignore` 排除。
+
+### Render 部署步骤
+
+1. 把代码推到 GitHub。
+2. 在 Render 创建新的 Web Service，或使用 Blueprint 导入 `render.yaml`。
+3. Build Command 使用：
+
+```text
+pip install -r requirements.txt
+```
+
+4. Start Command 使用：
+
+```text
+uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+
+5. 在 Environment 配好 `OPENAI_API_KEY`、`MODEL_NAME`、`MAX_HISTORY_MESSAGES`、`SYSTEM_PROMPT`。
+6. 部署完成后拿到公网 URL，例如：
+
+```text
+https://your-app.onrender.com
+```
+
+### memory.json 说明
+
+`memory.json` 保留给本地开发使用。应用启动时如果文件不存在，会按空 memory 处理，并在第一次写入时创建。
+
+Render 免费服务的文件系统不适合长期持久化：服务重启、重新部署或实例迁移后，本地文件里的记忆可能丢失。Phase 1 先接受这个限制，用来验证云端 API 链路；Phase 2 再把 memory 换成数据库。
+
+`memory.json` 已加入 `.gitignore`，避免把本地测试对话提交到远端仓库。
+
+## 云端测试
+
+把下面的 `https://your-app.onrender.com` 换成你的 Render URL。
+
+测试健康检查：
+
+```bash
+curl https://your-app.onrender.com/health
+```
+
+预期返回：
+
+```json
+{"status":"ok"}
+```
+
+第一次对话，写入记忆：
+
+```bash
+curl -X POST https://your-app.onrender.com/chat \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"yuhang","message":"你好，记住我在做微信AI机器人"}'
+```
+
+第二次对话，测试记忆：
+
+```bash
+curl -X POST https://your-app.onrender.com/chat \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"yuhang","message":"我在做什么？"}'
+```
+
+查看记忆长度：
+
+```bash
+curl https://your-app.onrender.com/memory/yuhang
+```
+
+清除记忆：
+
+```bash
+curl -X DELETE https://your-app.onrender.com/memory/yuhang
+```
 
 ## 项目方向
 

@@ -75,8 +75,12 @@ def load_memory() -> dict:
     if not MEMORY_FILE.exists():
         return {}
 
+    raw_memory = MEMORY_FILE.read_text(encoding="utf-8").strip()
+    if not raw_memory:
+        return {}
+
     try:
-        data = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
+        data = json.loads(raw_memory)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail="memory.json is not valid JSON") from exc
 
