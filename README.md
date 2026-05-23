@@ -5,7 +5,7 @@
 当前阶段只做 AI backend 部署准备：
 
 - FastAPI 后端
-- OpenAI SDK 调用 LLM
+- OpenAI-compatible SDK 调用 DeepSeek
 - `user_id` 级别的本地记忆
 - `memory.json` 持久化
 - Swagger `/docs` 测试
@@ -43,20 +43,11 @@ Copy-Item .env.example .env
 notepad .env
 ```
 
-OpenAI 配置示例：
-
-```env
-OPENAI_API_KEY=your_openai_api_key_here
-MODEL_NAME=gpt-4o-mini
-MAX_HISTORY_MESSAGES=20
-SYSTEM_PROMPT=你是一个运行在微信里的 AI 助手，回答要简洁、有帮助。
-```
-
 DeepSeek 配置示例：
 
 ```env
-OPENAI_API_KEY=your_deepseek_api_key_here
-OPENAI_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=your_deepseek_api_key
+LLM_BASE_URL=https://api.deepseek.com
 MODEL_NAME=deepseek-chat
 MAX_HISTORY_MESSAGES=20
 SYSTEM_PROMPT=你是一个运行在微信里的 AI 助手，回答要简洁、有帮助。
@@ -261,17 +252,8 @@ startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
 在 Render Dashboard 的 Environment 里配置：
 
 ```text
-OPENAI_API_KEY=your_openai_api_key_here
-MODEL_NAME=gpt-4o-mini
-MAX_HISTORY_MESSAGES=20
-SYSTEM_PROMPT=你是一个运行在微信里的 AI 助手，回答要简洁、有帮助。
-```
-
-如果改用 DeepSeek：
-
-```text
-OPENAI_API_KEY=your_deepseek_api_key_here
-OPENAI_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=your_deepseek_api_key
+LLM_BASE_URL=https://api.deepseek.com
 MODEL_NAME=deepseek-chat
 MAX_HISTORY_MESSAGES=20
 SYSTEM_PROMPT=你是一个运行在微信里的 AI 助手，回答要简洁、有帮助。
@@ -295,7 +277,7 @@ pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
-5. 在 Environment 配好 `OPENAI_API_KEY`、`MODEL_NAME`、`MAX_HISTORY_MESSAGES`、`SYSTEM_PROMPT`。
+5. 在 Environment 配好 `LLM_API_KEY`、`LLM_BASE_URL`、`MODEL_NAME`、`MAX_HISTORY_MESSAGES`、`SYSTEM_PROMPT`。
 6. 部署完成后拿到公网 URL，例如：
 
 ```text

@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-DEFAULT_MODEL_NAME = "gpt-4o-mini"
+DEFAULT_LLM_BASE_URL = "https://api.deepseek.com"
+DEFAULT_MODEL_NAME = "deepseek-chat"
 DEFAULT_MAX_HISTORY_MESSAGES = 20
 DEFAULT_SYSTEM_PROMPT = "你是一个运行在微信里的 AI 助手，回答要简洁、有帮助。"
 
@@ -44,17 +45,21 @@ logger = logging.getLogger("wechatclaw")
 
 app = FastAPI(title="WechatClaw Phase 0.5 AI Backend MVP")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
 MODEL_NAME = os.getenv("MODEL_NAME") or DEFAULT_MODEL_NAME
 MAX_HISTORY_MESSAGES = get_int_env("MAX_HISTORY_MESSAGES", DEFAULT_MAX_HISTORY_MESSAGES)
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT") or DEFAULT_SYSTEM_PROMPT
 MEMORY_FILE = Path(os.getenv("MEMORY_FILE", "memory.json"))
 MEMORY_LOCK = Lock()
 
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY is missing. Check your .env file.")
+if not LLM_API_KEY:
+    raise RuntimeError("LLM_API_KEY is missing. Check your .env file.")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(
+    api_key=LLM_API_KEY,
+    base_url=LLM_BASE_URL,
+)
 
 
 class ChatRequest(BaseModel):
@@ -118,10 +123,10 @@ def call_llm(user_id: str, history: list[dict[str, str]]) -> str:
         )
         answer = response.choices[0].message.content
     except Exception as exc:
-        print("========== OPENAI ERROR ==========")
+        print("========== LLM ERROR ==========")
         print(str(exc))
         traceback.print_exc()
-        print("==================================")
+        print("================================")
         logger.warning(
             "llm_failed user_id=%s history_length=%s model=%s error_type=%s",
             user_id,
