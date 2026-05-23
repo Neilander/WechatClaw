@@ -1,12 +1,13 @@
 import json
 import logging
 import os
+import traceback
 from pathlib import Path
 from threading import Lock
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from openai import OpenAI, OpenAIError
+from openai import OpenAI
 from pydantic import BaseModel, Field
 
 
@@ -43,11 +44,17 @@ logger = logging.getLogger("wechatclaw")
 
 app = FastAPI(title="WechatClaw Phase 0.5 AI Backend MVP")
 
-MODEL_NAME = os.getenv("MODEL_NAME") or os.getenv("OPENAI_MODEL") or os.getenv("DEEPSEEK_MODEL") or DEFAULT_MODEL_NAME
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+MODEL_NAME = os.getenv("MODEL_NAME") or DEFAULT_MODEL_NAME
 MAX_HISTORY_MESSAGES = get_int_env("MAX_HISTORY_MESSAGES", DEFAULT_MAX_HISTORY_MESSAGES)
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT") or DEFAULT_SYSTEM_PROMPT
 MEMORY_FILE = Path(os.getenv("MEMORY_FILE", "memory.json"))
 MEMORY_LOCK = Lock()
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY is missing. Check your .env file.")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 class ChatRequest(BaseModel):
@@ -101,34 +108,20 @@ def trim_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
     return history[-MAX_HISTORY_MESSAGES:]
 
 
-def get_llm_client() -> OpenAI:
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "LLM API key is not configured"},
-        )
-
-    base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL")
-    if not base_url and os.getenv("DEEPSEEK_API_KEY"):
-        base_url = "https://api.deepseek.com"
-
-    client_kwargs = {"api_key": api_key}
-    if base_url:
-        client_kwargs["base_url"] = base_url
-
-    return OpenAI(**client_kwargs)
-
-
 def call_llm(user_id: str, history: list[dict[str, str]]) -> str:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
 
     try:
-        response = get_llm_client().chat.completions.create(
+        response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
         )
-    except OpenAIError as exc:
+        answer = response.choices[0].message.content
+    except Exception as exc:
+        print("========== OPENAI ERROR ==========")
+        print(str(exc))
+        traceback.print_exc()
+        print("==================================")
         logger.warning(
             "llm_failed user_id=%s history_length=%s model=%s error_type=%s",
             user_id,
@@ -136,18 +129,13 @@ def call_llm(user_id: str, history: list[dict[str, str]]) -> str:
             MODEL_NAME,
             type(exc).__name__,
         )
-        raise HTTPException(status_code=500, detail={"error": "LLM request failed"}) from exc
-
-    try:
-        answer = response.choices[0].message.content
-    except (AttributeError, IndexError) as exc:
-        logger.warning(
-            "llm_invalid_response user_id=%s history_length=%s model=%s",
-            user_id,
-            len(history),
-            MODEL_NAME,
-        )
-        raise HTTPException(status_code=500, detail={"error": "LLM returned an invalid response"}) from exc
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "LLM request failed",
+                "real_error": str(exc),
+            },
+        ) from exc
 
     logger.info(
         "llm_success user_id=%s history_length=%s model=%s",
