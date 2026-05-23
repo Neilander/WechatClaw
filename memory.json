@@ -2,27 +2,11 @@
   "leo": [
     {
       "role": "user",
-      "content": "who am I"
+      "content": "你没忘了我是谁吧"
     },
     {
       "role": "assistant",
-      "content": "我无法知道您是谁，但我可以帮助您解决问题或提供信息。请告诉我您需要什么！"
-    },
-    {
-      "role": "user",
-      "content": "我叫 Leo，我正在开发 WechatClaw，一个微信 AI 机器人项目。"
-    },
-    {
-      "role": "assistant",
-      "content": "你好，Leo！听起来很有趣！如果你需要关于微信 AI 机器人的建议或技术支持，可以随时问我。"
-    },
-    {
-      "role": "user",
-      "content": "我是谁？我在做什么项目？"
-    },
-    {
-      "role": "assistant",
-      "content": "你是 Leo，正在开发一个名为 WechatClaw 的微信 AI 机器人项目。"
+      "content": "当然没有！请问有什么我可以帮助你的？"
     }
   ]
 }
