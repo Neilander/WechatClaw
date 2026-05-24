@@ -6,7 +6,8 @@ from pathlib import Path
 from threading import Lock
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
@@ -154,6 +155,11 @@ def call_llm(user_id: str, history: list[dict[str, str]]) -> str:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/wecom/callback")
+async def wecom_verify(request: Request):
+    return PlainTextResponse("wechatclaw ok")
 
 
 @app.post("/chat", response_model=ChatResponse)
