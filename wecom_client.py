@@ -77,3 +77,25 @@ class WeComClient:
             "text": {"content": content},
         }
         return self._post("kf/send_msg", body)
+
+    def get_service_state(self, open_kfid: str, external_userid: str) -> dict:
+        return self._post(
+            "kf/service_state/get",
+            {"open_kfid": open_kfid, "external_userid": external_userid},
+        )
+
+    def trans_service_state(
+        self,
+        open_kfid: str,
+        external_userid: str,
+        service_state: int,
+        servicer_userid: str = "",
+    ) -> dict:
+        body = {
+            "open_kfid": open_kfid,
+            "external_userid": external_userid,
+            "service_state": service_state,
+        }
+        if servicer_userid:
+            body["servicer_userid"] = servicer_userid
+        return self._post("kf/service_state/trans", body)

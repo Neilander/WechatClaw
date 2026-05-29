@@ -238,16 +238,51 @@ def save_cursor(open_kfid: str, cursor: str) -> None:
         CURSOR_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
+def ensure_bot_session(open_kfid: str, external_userid: str) -> bool:
+    """确保会话由"智能助手"接待(状态1)，否则机器人无法发消息。
+
+    微信客服规定：只有会话处于"智能助手接待"状态时，API 才能发消息。
+    新会话初始为"未处理(0)"，必须尽早抢成 1；一旦溜进排队(2)/人工(3)/
+    结束(4)就接管不了。返回 True 表示可以发消息。
+    """
+    state = wecom_client.get_service_state(open_kfid, external_userid).get("service_state")
+    if state == 1:
+        return True
+    if state == 0:
+        resp = wecom_client.trans_service_state(open_kfid, external_userid, 1)
+        if resp.get("errcode"):
+            logger.warning("转智能助手失败 user=%s resp=%s", external_userid, resp)
+            return False
+        return True
+    logger.warning("会话状态=%s 机器人无法接管 user=%s", state, external_userid)
+    return False
+
+
 def process_kf_message(msg: dict) -> None:
-    """处理一条客服消息：只回复客户发来的文字消息。"""
-    # origin: 3=客户发的, 4=系统推送, 5=接待人员发的。只处理 3，避免回复自己。
-    if msg.get("origin") != 3 or msg.get("msgtype") != "text":
+    """处理一条客服消息：抢占会话 -> 只回复客户发来的文字消息。"""
+    msgtype = msg.get("msgtype")
+    open_kfid = msg.get("open_kfid")
+    external_userid = msg.get("external_userid")
+
+    # 用户进入会话事件：尽早把会话抢成"智能助手"，避免溜进排队池。
+    if msgtype == "event":
+        event = msg.get("event") or {}
+        if event.get("event_type") == "enter_session":
+            ek = event.get("open_kfid") or open_kfid
+            eu = event.get("external_userid") or external_userid
+            if ek and eu:
+                ensure_bot_session(ek, eu)
         return
 
-    external_userid = msg.get("external_userid")
-    open_kfid = msg.get("open_kfid")
+    # origin: 3=客户发的, 4=系统推送, 5=接待人员发的。只处理 3，避免回复自己。
+    if msg.get("origin") != 3 or msgtype != "text":
+        return
+
     content = (msg.get("text") or {}).get("content", "").strip()
     if not external_userid or not open_kfid or not content:
+        return
+
+    if not ensure_bot_session(open_kfid, external_userid):
         return
 
     answer, _ = generate_reply(external_userid, content)
