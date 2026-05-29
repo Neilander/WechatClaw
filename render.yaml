@@ -15,3 +15,11 @@ services:
         value: "20"
       - key: SYSTEM_PROMPT
         value: 你是一个运行在微信里的 AI 助手，回答要简洁、有帮助。
+      - key: WECOM_CORP_ID
+        value: ww0b90e784acf31a36
+      - key: WECOM_KF_SECRET
+        sync: false
+      - key: WECOM_TOKEN
+        sync: false
+      - key: WECOM_ENCODING_AES_KEY
+        sync: false

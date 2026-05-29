@@ -6,10 +6,13 @@ from pathlib import Path
 from threading import Lock
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
+
+from wecom_client import WeComClient
+from wecom_crypto import WeComCrypto, WeComCryptoError, extract_encrypt, parse_message
 
 
 load_dotenv()
@@ -61,6 +64,28 @@ client = OpenAI(
     api_key=LLM_API_KEY,
     base_url=LLM_BASE_URL,
 )
+
+# ----- 企业微信客服配置 -----
+WECOM_CORP_ID = os.getenv("WECOM_CORP_ID")
+WECOM_KF_SECRET = os.getenv("WECOM_KF_SECRET")
+WECOM_TOKEN = os.getenv("WECOM_TOKEN")
+WECOM_ENCODING_AES_KEY = os.getenv("WECOM_ENCODING_AES_KEY")
+
+CURSOR_FILE = Path(os.getenv("WECOM_CURSOR_FILE", "wecom_cursor.json"))
+CURSOR_LOCK = Lock()
+KF_SYNC_LOCK = Lock()
+
+# 只有四个配置都齐全时才启用微信客服。缺任何一个就跳过，本地开发不受影响。
+WECOM_ENABLED = all([WECOM_CORP_ID, WECOM_KF_SECRET, WECOM_TOKEN, WECOM_ENCODING_AES_KEY])
+
+if WECOM_ENABLED:
+    wecom_crypto = WeComCrypto(WECOM_TOKEN, WECOM_ENCODING_AES_KEY, WECOM_CORP_ID)
+    wecom_client = WeComClient(WECOM_CORP_ID, WECOM_KF_SECRET)
+    logger.info("WeCom 客服已启用")
+else:
+    wecom_crypto = None
+    wecom_client = None
+    logger.warning("WeCom 客服未启用：缺少 WECOM_* 环境变量，仅 /chat 可用")
 
 
 class ChatRequest(BaseModel):
@@ -152,26 +177,11 @@ def call_llm(user_id: str, history: list[dict[str, str]]) -> str:
     return answer or ""
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def generate_reply(user_id: str, message: str) -> tuple[str, int]:
+    """核心对话逻辑：读记忆 -> 调 LLM -> 写记忆。返回 (回复, 历史长度)。
 
-
-@app.get("/wecom/callback")
-async def wecom_verify(request: Request):
-    return PlainTextResponse("wechatclaw ok")
-
-
-@app.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest) -> ChatResponse:
-    user_id = payload.user_id.strip()
-    message = payload.message.strip()
-
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id cannot be empty")
-    if not message:
-        raise HTTPException(status_code=400, detail="message cannot be empty")
-
+    /chat 和微信客服回调共用这一段逻辑。
+    """
     with MEMORY_LOCK:
         memory = load_memory()
         history = memory.setdefault(user_id, [])
@@ -191,10 +201,155 @@ def chat(payload: ChatRequest) -> ChatResponse:
         memory[user_id] = history
         save_memory(memory)
 
+    return answer, len(history)
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+def load_cursor(open_kfid: str) -> str:
+    """读取某个客服账号上次同步到的位置。"""
+    with CURSOR_LOCK:
+        if not CURSOR_FILE.exists():
+            return ""
+        raw = CURSOR_FILE.read_text(encoding="utf-8").strip()
+        if not raw:
+            return ""
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return ""
+        return data.get(open_kfid, "")
+
+
+def save_cursor(open_kfid: str, cursor: str) -> None:
+    with CURSOR_LOCK:
+        data = {}
+        if CURSOR_FILE.exists():
+            raw = CURSOR_FILE.read_text(encoding="utf-8").strip()
+            if raw:
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    data = {}
+        data[open_kfid] = cursor
+        CURSOR_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def process_kf_message(msg: dict) -> None:
+    """处理一条客服消息：只回复客户发来的文字消息。"""
+    # origin: 3=客户发的, 4=系统推送, 5=接待人员发的。只处理 3，避免回复自己。
+    if msg.get("origin") != 3 or msg.get("msgtype") != "text":
+        return
+
+    external_userid = msg.get("external_userid")
+    open_kfid = msg.get("open_kfid")
+    content = (msg.get("text") or {}).get("content", "").strip()
+    if not external_userid or not open_kfid or not content:
+        return
+
+    answer, _ = generate_reply(external_userid, content)
+    resp = wecom_client.send_text(external_userid, open_kfid, answer)
+    if resp.get("errcode"):
+        logger.warning("send_msg 失败 external_userid=%s resp=%s", external_userid, resp)
+
+
+def handle_kf_event(token: str, open_kfid: str) -> None:
+    """收到'有新消息'事件后，拉取并处理消息。在后台任务中运行。"""
+    with KF_SYNC_LOCK:
+        cursor = load_cursor(open_kfid)
+        has_more = 1
+        while has_more:
+            resp = wecom_client.sync_msg(token=token, cursor=cursor, open_kfid=open_kfid)
+            if resp.get("errcode"):
+                logger.warning("sync_msg 失败 open_kfid=%s resp=%s", open_kfid, resp)
+                return
+
+            for msg in resp.get("msg_list", []):
+                try:
+                    process_kf_message(msg)
+                except Exception:
+                    logger.exception("处理单条消息出错 msgid=%s", msg.get("msgid"))
+
+            cursor = resp.get("next_cursor", cursor)
+            save_cursor(open_kfid, cursor)
+            has_more = resp.get("has_more", 0)
+
+
+@app.get("/wecom/callback")
+async def wecom_verify(
+    msg_signature: str = "",
+    timestamp: str = "",
+    nonce: str = "",
+    echostr: str = "",
+):
+    """企业微信配置回调 URL 时的验证握手。"""
+    if not WECOM_ENABLED:
+        return PlainTextResponse("wechatclaw ok (wecom disabled)")
+    if not echostr:
+        return PlainTextResponse("wechatclaw ok")
+
+    try:
+        plain = wecom_crypto.decrypt_message(msg_signature, timestamp, nonce, echostr)
+    except WeComCryptoError as exc:
+        logger.warning("回调验证失败: %s", exc)
+        raise HTTPException(status_code=403, detail="verification failed")
+
+    return PlainTextResponse(plain)
+
+
+@app.post("/wecom/callback")
+async def wecom_callback(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    msg_signature: str = "",
+    timestamp: str = "",
+    nonce: str = "",
+):
+    """接收企业微信推送的消息事件。"""
+    if not WECOM_ENABLED:
+        raise HTTPException(status_code=503, detail="wecom disabled")
+
+    body = (await request.body()).decode("utf-8")
+
+    try:
+        encrypt = extract_encrypt(body)
+        xml_text = wecom_crypto.decrypt_message(msg_signature, timestamp, nonce, encrypt)
+    except WeComCryptoError as exc:
+        logger.warning("回调消息解密失败: %s", exc)
+        raise HTTPException(status_code=403, detail="decrypt failed")
+
+    event = parse_message(xml_text)
+
+    # 微信客服的新消息事件，Event=kf_msg_or_event，带 Token 和 OpenKfId。
+    if event.get("Event") == "kf_msg_or_event":
+        token = event.get("Token", "")
+        open_kfid = event.get("OpenKfId", "")
+        if token and open_kfid:
+            # 后台拉取处理，先立刻返回，避免微信 5 秒超时重推。
+            background_tasks.add_task(handle_kf_event, token, open_kfid)
+
+    return PlainTextResponse("success")
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(payload: ChatRequest) -> ChatResponse:
+    user_id = payload.user_id.strip()
+    message = payload.message.strip()
+
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id cannot be empty")
+    if not message:
+        raise HTTPException(status_code=400, detail="message cannot be empty")
+
+    answer, history_length = generate_reply(user_id, message)
+
     return ChatResponse(
         user_id=user_id,
         answer=answer,
-        history_length=len(history),
+        history_length=history_length,
     )
 
 

@@ -1,4 +1,5 @@
 .env
 memory.json
+wecom_cursor.json
 __pycache__/
 *.py[cod]
